@@ -90,8 +90,9 @@ class PromptLearner(nn.Module):
         print(f'Initial context: "{prompt_prefix}"')
         print(f"Number of context words (tokens): {n_ctx}")
 
+        # learnable context vectors
         self.ctx = nn.Parameter(ctx_vectors)
-
+        # meta net
         self.meta_net = nn.Sequential(OrderedDict([
             ("linear1", nn.Linear(vis_dim, vis_dim // 16)),
             ("relu", nn.ReLU(inplace=True)),
@@ -129,7 +130,7 @@ class PromptLearner(nn.Module):
         if label is not None:
             prefix = prefix[label]
             suffix = suffix[label]
-
+        # 默认将类别放在末尾
         prompts = torch.cat(
             [
                 prefix,  # (dim0, 1, dim)
@@ -152,7 +153,7 @@ class PromptLearner(nn.Module):
         
         # Use instance-conditioned context tokens for all classes
         prompts = []
-        for ctx_shifted_i in ctx_shifted:
+        for ctx_shifted_i in ctx_shifted:  # 对每一个样本
             ctx_i = ctx_shifted_i.unsqueeze(0).expand(self.n_cls, -1, -1)
             pts_i = self.construct_prompts(ctx_i, prefix, suffix)  # (n_cls, n_tkn, ctx_dim)
             prompts.append(pts_i)
@@ -176,14 +177,14 @@ class CustomCLIP(nn.Module):
         logit_scale = self.logit_scale.exp()
 
         image_features = self.image_encoder(image.type(self.dtype))
-        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)  # 归一化
 
         prompts = self.prompt_learner(image_features)
         
         logits = []
-        for pts_i, imf_i in zip(prompts, image_features):
+        for pts_i, imf_i in zip(prompts, image_features):  # 对每个样本
             text_features = self.text_encoder(pts_i, tokenized_prompts)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)   # 归一化
             l_i = logit_scale * imf_i @ text_features.t()
             logits.append(l_i)
         logits = torch.stack(logits)

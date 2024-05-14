@@ -50,8 +50,8 @@ class TextEncoder(nn.Module):
         x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x).type(self.dtype)
 
-        # x.shape = [batch_size, n_ctx, transformer.width]
-        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        # x.shape = [batch_size, 77, transformer.width]
+        # take features from the eot embedding (eot_token is the highest number in each sequence) 获取类别token对应的向量
         x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.text_projection
 
         return x
@@ -60,8 +60,8 @@ class TextEncoder(nn.Module):
 class PromptLearner(nn.Module):
     def __init__(self, cfg, classnames, clip_model):
         super().__init__()
-        n_cls = len(classnames)
-        n_ctx = cfg.TRAINER.COOP.N_CTX
+        n_cls = len(classnames)  # cls num
+        n_ctx = cfg.TRAINER.COOP.N_CTX  # contex tokens num
         ctx_init = cfg.TRAINER.COOP.CTX_INIT
         dtype = clip_model.dtype
         ctx_dim = clip_model.ln_final.weight.shape[0]
@@ -86,14 +86,14 @@ class PromptLearner(nn.Module):
                 ctx_vectors = torch.empty(n_cls, n_ctx, ctx_dim, dtype=dtype)
             else:
                 print("Initializing a generic context")
-                ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
+                ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)  # 初始化context vectors：n_ctx*ctx_dim
             nn.init.normal_(ctx_vectors, std=0.02)
-            prompt_prefix = " ".join(["X"] * n_ctx)
+            prompt_prefix = " ".join(["X"] * n_ctx)  # prompt 占位符
 
         print(f'Initial context: "{prompt_prefix}"')
         print(f"Number of context words (tokens): {n_ctx}")
 
-        self.ctx = nn.Parameter(ctx_vectors)  # to be optimized
+        self.ctx = nn.Parameter(ctx_vectors)  # to be optimized，需要优化的上下文向量context vectors
 
         classnames = [name.replace("_", " ") for name in classnames]
         name_lens = [len(_tokenizer.encode(name)) for name in classnames]
@@ -103,22 +103,22 @@ class PromptLearner(nn.Module):
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
 
-        # These token vectors will be saved when in save_model(),
-        # but they should be ignored in load_model() as we want to use
+        # These token vectors will be saved when in save_model(),but they should be ignored in load_model() as we want to use
         # those computed using the current class names
+        # Adds a buffer to the module. Buffers can be accessed as attributes using given names.
         self.register_buffer("token_prefix", embedding[:, :1, :])  # SOS
-        self.register_buffer("token_suffix", embedding[:, 1 + n_ctx :, :])  # CLS, EOS
+        self.register_buffer("token_suffix", embedding[:, 1 + n_ctx :, :])  # CLS to EOS
 
         self.n_cls = n_cls
         self.n_ctx = n_ctx
         self.tokenized_prompts = tokenized_prompts  # torch.Tensor
         self.name_lens = name_lens
-        self.class_token_position = cfg.TRAINER.COOP.CLASS_TOKEN_POSITION
+        self.class_token_position = cfg.TRAINER.COOP.CLASS_TOKEN_POSITION  # 默认将cls token放在prompt末尾
 
     def forward(self):
-        ctx = self.ctx
+        ctx = self.ctx  # 需要优化的上下文向量context vectors
         if ctx.dim() == 2:
-            ctx = ctx.unsqueeze(0).expand(self.n_cls, -1, -1)
+            ctx = ctx.unsqueeze(0).expand(self.n_cls, -1, -1)  # 拓展为n_cls * n_ctx * ctx_dim
 
         prefix = self.token_prefix
         suffix = self.token_suffix
@@ -195,8 +195,8 @@ class CustomCLIP(nn.Module):
     def forward(self, image):
         image_features = self.image_encoder(image.type(self.dtype))
 
-        prompts = self.prompt_learner()
-        tokenized_prompts = self.tokenized_prompts
+        prompts = self.prompt_learner()  # 添加了提示词的向量 n_cls * 77 * ctx_dim
+        tokenized_prompts = self.tokenized_prompts  # n_cls * 77，prompts的token
         text_features = self.text_encoder(prompts, tokenized_prompts)
 
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
