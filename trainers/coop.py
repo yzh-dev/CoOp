@@ -62,7 +62,7 @@ class PromptLearner(nn.Module):
         super().__init__()
         n_cls = len(classnames)  # cls num
         n_ctx = cfg.TRAINER.COOP.N_CTX  # contex tokens num
-        ctx_init = cfg.TRAINER.COOP.CTX_INIT
+        ctx_init = cfg.TRAINER.COOP.CTX_INIT  # 自定义的初始化上下文
         dtype = clip_model.dtype
         ctx_dim = clip_model.ln_final.weight.shape[0]
         clip_imsize = clip_model.visual.input_resolution
@@ -81,7 +81,7 @@ class PromptLearner(nn.Module):
 
         else:
             # random initialization
-            if cfg.TRAINER.COOP.CSC:
+            if cfg.TRAINER.COOP.CSC:  # 学习每个类别专有的上下文
                 print("Initializing class-specific contexts")
                 ctx_vectors = torch.empty(n_cls, n_ctx, ctx_dim, dtype=dtype)
             else:
@@ -92,14 +92,14 @@ class PromptLearner(nn.Module):
 
         print(f'Initial context: "{prompt_prefix}"')
         print(f"Number of context words (tokens): {n_ctx}")
-
+        # ctx: (n_ctx, ctx_dim)
         self.ctx = nn.Parameter(ctx_vectors)  # to be optimized，需要优化的上下文向量context vectors
 
         classnames = [name.replace("_", " ") for name in classnames]
         name_lens = [len(_tokenizer.encode(name)) for name in classnames]
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
 
-        tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts])
+        tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts])  # 会自动添加sot_token、eot_token标志
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
 
@@ -197,7 +197,7 @@ class CustomCLIP(nn.Module):
 
         prompts = self.prompt_learner()  # 添加了提示词的向量 n_cls * 77 * ctx_dim
         tokenized_prompts = self.tokenized_prompts  # n_cls * 77，prompts的token
-        text_features = self.text_encoder(prompts, tokenized_prompts)
+        text_features = self.text_encoder(prompts, tokenized_prompts)  # tokenized_prompts的作用是找到到每个类别对应的eot_token位置
 
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
@@ -235,7 +235,7 @@ class CoOp(TrainerX):
 
         print("Turning off gradients in both the image and the text encoder")
         for name, param in self.model.named_parameters():
-            if "prompt_learner" not in name:
+            if "prompt_learner" not in name:  # 冻结视觉和文本编码器
                 param.requires_grad_(False)
 
         if cfg.MODEL.INIT_WEIGHTS:
@@ -243,7 +243,7 @@ class CoOp(TrainerX):
 
         self.model.to(self.device)
         # NOTE: only give prompt_learner to the optimizer
-        self.optim = build_optimizer(self.model.prompt_learner, cfg.OPTIM)
+        self.optim = build_optimizer(self.model.prompt_learner, cfg.OPTIM)  # CoOp只训练prompt_learner
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
         self.register_model("prompt_learner", self.model.prompt_learner, self.optim, self.sched)
 

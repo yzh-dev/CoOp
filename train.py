@@ -1,3 +1,5 @@
+import warnings
+warnings.filterwarnings("ignore")
 import argparse
 import torch
 
@@ -25,7 +27,9 @@ import datasets.imagenet_r
 
 import trainers.coop
 import trainers.cocoop
+from trainers.clip_adapter import CLIP_Adapter
 import trainers.zsclip
+import wandb
 
 
 def print_args(args, cfg):
@@ -127,6 +131,16 @@ def setup_cfg(args):
 
 def main(args):
     cfg = setup_cfg(args)
+    wandb.init(
+        project="CoOp",
+        name="{}-{}-{}-".format(
+            args.trainer,
+            args.target_domains,
+            cfg.OPTIM.LR
+        ),
+        config=vars(args)  # namespace to dict
+    )
+
     if cfg.SEED >= 0:
         print("Setting fixed seed: {}".format(cfg.SEED))
         set_random_seed(cfg.SEED)

@@ -133,3 +133,4 @@ output/
 debug.sh
 /.idea/
 /logs/
+/wandb/

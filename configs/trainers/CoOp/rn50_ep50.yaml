@@ -27,3 +27,6 @@ TRAIN:
 MODEL:
   BACKBONE:
     NAME: "RN50"
+
+TEST:
+  FINAL_MODEL: "best_val"

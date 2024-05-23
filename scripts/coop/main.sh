@@ -24,9 +24,9 @@ do
         --dataset-config-file configs/datasets/${DATASET}.yaml \
         --config-file configs/trainers/${TRAINER}/${CFG}.yaml \
         --output-dir ${DIR} \
-        TRAINER.COOP.N_CTX ${NCTX} \
-        TRAINER.COOP.CSC ${CSC} \
         TRAINER.COOP.CLASS_TOKEN_POSITION ${CTP} \
-        DATASET.NUM_SHOTS ${SHOTS}
+        TRAINER.COOP.N_CTX ${NCTX} \
+        DATASET.NUM_SHOTS ${SHOTS} \
+        TRAINER.COOP.CSC ${CSC} \
     fi
 done

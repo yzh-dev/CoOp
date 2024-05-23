@@ -31,3 +31,6 @@ MODEL:
 TRAINER:
   COOP:
     CTX_INIT: "a photo of a"
+
+TEST:
+  FINAL_MODEL: "best_val"
