@@ -1,8 +1,11 @@
 DATALOADER:
   TRAIN_X:
-    BATCH_SIZE: 32
+    BATCH_SIZE: 30
+    SAMPLER: "RandomDomainSampler"
   TEST:
-    BATCH_SIZE: 100
+    SAMPLER: "RandomDomainSampler"
+    BATCH_SIZE: 90
+#    BATCH_SIZE: 100
   NUM_WORKERS: 8
 
 INPUT:
@@ -28,5 +31,10 @@ MODEL:
   BACKBONE:
     NAME: "RN50"
 
-#TEST:
-#  FINAL_MODEL: "best_val"
+TRAINER:
+  COOP:
+    CTX_INIT: "a photo of a"
+#    STRONG_TRANSFORMS: ["random_flip", "cutout", "randaugment2", "normalize"]
+
+TEST:
+  FINAL_MODEL: "best_val"

@@ -6,7 +6,6 @@ import torch
 from dassl.utils import setup_logger, set_random_seed, collect_env_info
 from dassl.config import get_cfg_default
 from dassl.engine import build_trainer
-
 # custom
 import datasets.oxford_pets
 import datasets.oxford_flowers
@@ -27,10 +26,14 @@ import datasets.imagenet_r
 
 import trainers.coop
 import trainers.cocoop
+from trainers.encoop import EnCoOp
 from trainers.clip_adapter import CLIP_Adapter
 import trainers.zsclip
 import wandb
 
+import sys
+if sys.platform.startswith("linux"):
+    from mps_client import client
 
 def print_args(args, cfg):
     print("***************")
@@ -131,15 +134,17 @@ def setup_cfg(args):
 
 def main(args):
     cfg = setup_cfg(args)
-    wandb.init(
-        project="CoOp",
-        name="{}-{}-{}-".format(
-            args.trainer,
-            args.target_domains,
-            cfg.OPTIM.LR
-        ),
-        config=vars(args)  # namespace to dict
-    )
+    isDebug = True if sys.gettrace() else False
+    if sys.platform.startswith("linux") or not isDebug:
+        wandb.init(
+            project="CoOp",
+            name="{}-{}-{}-".format(
+                args.trainer,
+                args.target_domains,
+                cfg.OPTIM.LR
+            ),
+            config=vars(args)  # namespace to dict
+        )
 
     if cfg.SEED >= 0:
         print("Setting fixed seed: {}".format(cfg.SEED))
@@ -165,8 +170,11 @@ def main(args):
 
 
 if __name__ == "__main__":
+    if sys.platform.startswith("linux"):
+        client.handle()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=str, default="D:\ML\Dataset", help="path to dataset")
+    # parser.add_argument("--root", type=str, default="D:\ML\Dataset", help="path to dataset")
+    parser.add_argument("--root", type=str, default="../../data/", help="path to dataset")
     parser.add_argument("--output-dir", type=str, default="./logs/", help="output directory")
     parser.add_argument(
         "--resume",
@@ -178,7 +186,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset-config-file",
         type=str,
-        default="configs/datasets/food101.yaml",
+        default="configs/datasets/officehome.yaml",
         help="path to config file for dataset setup",
     )
     parser.add_argument("--source-domains", type=str, nargs="+", help="source domains for DA/DG")
@@ -190,8 +198,8 @@ if __name__ == "__main__":
     # parser.add_argument("--trainer", type=str, default="CoOp", help="name of trainer")
 
     # CoCoOp
-    parser.add_argument("--config-file", type=str, default="configs/trainers/CoCoOp/vit_b16_c4_ep10_batch1.yaml")
-    parser.add_argument("--trainer", type=str, default="CoCoOp", help="name of trainer")
+    parser.add_argument("--config-file", type=str, default="configs/trainers/CoOp/rn50_ep50_ctxv1.yaml")
+    parser.add_argument("--trainer", type=str, default="CLIP_Adapter", help="name of trainer")
 
     parser.add_argument("--backbone", type=str, default="", help="name of CNN backbone")
     parser.add_argument("--head", type=str, default="", help="name of head")
