@@ -106,6 +106,9 @@ def extend_cfg(cfg):
     cfg.TRAINER.COCOOP.CTX_INIT = ""  # initialization words
     cfg.TRAINER.COCOOP.PREC = "fp16"  # fp16, fp32, amp
 
+    cfg.TRAINER.ENCOOP = CN()
+    cfg.TRAINER.ENCOOP.STRONG_TRANSFORMS=["random_flip", "cutout", "randaugment2", "normalize"]
+
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
 
 

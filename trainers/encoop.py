@@ -12,6 +12,8 @@ from dassl.optim import build_optimizer, build_lr_scheduler
 
 from clip import clip
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
+from dassl.data.transforms import build_transform
+from dassl.data import DataManager
 
 _tokenizer = _Tokenizer()
 
@@ -119,8 +121,6 @@ class PromptLearner(nn.Module):
         self.name_lens = name_lens
         self.class_token_position = cfg.TRAINER.COOP.CLASS_TOKEN_POSITION  # 默认将cls token放在prompt末尾
 
-
-
     def forward(self, domain_i):
         # ctx: (num_domains, n_ctx, ctx_dim)
         ctx = self.ctx  # 需要优化的上下文向量context vectors
@@ -205,36 +205,86 @@ class CustomCLIP(nn.Module):
         self.split_batch = cfg["SPLIT_BATCH"]
         self.cfg = cfg
 
-    def forward(self, image, domain):
+    def forward(self, weak_image, strong_image, domain):
         # 按照域划分数据
-        image_list = torch.split(image, self.split_batch, 0)  # list
+        weak_image_list = torch.split(weak_image, self.split_batch, 0)  # list
+        strong_image_list = torch.split(strong_image, self.split_batch, 0)  # list
         domain_list = torch.split(domain, self.split_batch, 0)
-        logits = []
-        for imgs, domains in zip(image_list, domain_list):  # 迭代每个domain的数据
-            image_features = self.image_encoder(imgs.type(self.dtype))
-            prompts_i = self.prompt_learner(domains[0])  # 添加了提示词的向量 n_cls * 77 * ctx_dim
+        domain_list = [d[0].item() for d in domain_list]
+        # 提取不同domain下的特征
+        weak_feat_list = [self.image_encoder(x.type(self.dtype)) for x in weak_image_list]  # 弱增强特征
+        strong_feat_list = [self.image_encoder(x.type(self.dtype)) for x in strong_image_list]  # 强增强特征
 
+        logits_x = []
+        loss_cr = 0
+        # labeled loss of domain_specific_context  迭代每个domain的数据
+        for weak_feat_i, strong_feat_i, domain_i in zip(weak_feat_list, strong_feat_list, domain_list):
+            weak_feat_i = weak_feat_i / weak_feat_i.norm(dim=-1, keepdim=True)
+            prompts_i = self.prompt_learner(domain_i)  # 添加了提示词的向量 n_cls * 77 * ctx_dim
             tokenized_prompts = self.tokenized_prompts  # n_cls * 77，prompts的token
-            text_features = self.text_encoder(prompts_i,
-                                              tokenized_prompts)  # tokenized_prompts的作用是找到到每个类别对应的eot_token位置
-
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-
+            text_feat_i = self.text_encoder(prompts_i, tokenized_prompts)  # tokenized_prompts的作用是找到到每个类别对应的eot_token位置
+            text_feat_i = text_feat_i / text_feat_i.norm(dim=-1, keepdim=True)
             logit_scale = self.logit_scale.exp()
-            logits_i = logit_scale * image_features @ text_features.t()
-            logits.append(logits_i)
-        logits =torch.cat(logits,dim=0)
-        return logits
+            logits_i = logit_scale * weak_feat_i @ text_feat_i.t()
+            logits_x.append(logits_i)
 
-    def ensemble_inference(self, image):  # input:BCHW，取所有所有domain_specific context的平均预测结果
+            logits_j_list = []
+            strong_feat_i = strong_feat_i / strong_feat_i.norm(dim=-1, keepdim=True)
+            cr_s = [j for j in domain_list if j != domain_i]  # 与其他域的一致性损失
+            for domain_j in cr_s:
+                prompts_j = self.prompt_learner(domain_j)  # 添加了提示词的向量 n_cls * 77 * ctx_dim
+                tokenized_prompts = self.tokenized_prompts  # n_cls * 77，prompts的token
+                text_feat_j = self.text_encoder(prompts_j, tokenized_prompts)  # tokenized_prompts的作用是找到到每个类别对应的eot_token位置
+                text_feat_j = text_feat_j / text_feat_j.norm(dim=-1, keepdim=True)
+                logit_scale = self.logit_scale.exp()
+                logits_j = logit_scale * strong_feat_i @ text_feat_j.t()
+                logits_j_list.append(logits_j.unsqueeze(0))
+                # loss_cr += ((logits_i - logits_j) ** 2).sum(1).mean()
+
+            logits_j_list = torch.cat(logits_j_list, dim=0)
+            logits_j_mean = torch.mean(logits_j_list, dim=0)
+            loss_cr += ((logits_i - logits_j_mean) ** 2).sum(1).mean()
+
+        loss_cr = 0.001*loss_cr
+        logits_x = torch.cat(logits_x, dim=0)
+        return logits_x, loss_cr
+
+    def valid_forward(self, image, domain):
+        # 按照domain分别调用对应的分类头 TODO：修改为集成预测
+        # 按照域划分数据
+        weak_image_list = torch.split(image, self.split_batch, 0)  # list
+        domain_list = torch.split(domain, self.split_batch, 0)
+        domain_list = [d[0].item() for d in domain_list]
+        logits_x = []
+        # 提取不同domain下的特征
+        weak_feat_list = [self.image_encoder(x.type(self.dtype)) for x in weak_image_list]  # 弱增强特征
+        # 提取对应的text feat
+        text_feat_list = []
+        for d in domain_list:
+            prompts_i = self.prompt_learner(d)  # 添加了提示词的向量 n_cls * 77 * ctx_dim
+            tokenized_prompts = self.tokenized_prompts  # n_cls * 77，prompts的token
+            text_features = self.text_encoder(prompts_i, tokenized_prompts)  # tokenized_prompts的作用是找到到每个类别对应的eot_token位置
+            text_feat_list.append(text_features)
+
+        # labeled loss of domain_specific_context  迭代每个domain的数据
+        for weak_feat, domain_i in zip(weak_feat_list, domain_list):
+            weak_feat = weak_feat / weak_feat.norm(dim=-1, keepdim=True)
+            text_feat_i = text_feat_list[domain_i]
+            text_feat_i = text_feat_i / text_feat_i.norm(dim=-1, keepdim=True)
+            logit_scale = self.logit_scale.exp()
+            logits_i = logit_scale * weak_feat @ text_feat_i.t()
+            logits_x.append(logits_i)
+
+        logits_x = torch.cat(logits_x, dim=0)
+        return logits_x
+
+    def ensemble_inference(self, image):  # input:BCHW，取所有domain_specific context的平均预测结果
         logits = []
         for domain_i in range(self.cfg["NUM_SRC_DOMAINS"]):
             image_features = self.image_encoder(image.type(self.dtype))
             prompts_i = self.prompt_learner(domain_i)  # 添加了提示词的向量 n_cls * 77 * ctx_dim
             tokenized_prompts = self.tokenized_prompts  # n_cls * 77，prompts的token
-            text_features = self.text_encoder(prompts_i,
-                                              tokenized_prompts)  # tokenized_prompts的作用是找到到每个类别对应的eot_token位置
+            text_features = self.text_encoder(prompts_i, tokenized_prompts)  # tokenized_prompts的作用是找到到每个类别对应的eot_token位置
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
@@ -258,6 +308,23 @@ class EnCoOp(TrainerX):
         assert cfg.TRAINER.COOP.PREC in ["fp16", "fp32", "amp"]
         assert cfg.DATALOADER.TRAIN_X.SAMPLER == "RandomDomainSampler"
         # assert len(cfg.TRAINER.DAELDG.STRONG_TRANSFORMS) > 0
+
+    def build_data_loader(self):
+        cfg = self.cfg
+        tfm_train = build_transform(cfg, is_train=True)
+        custom_tfm_train = [tfm_train]
+        choices = cfg.TRAINER.ENCOOP.STRONG_TRANSFORMS
+        tfm_train_strong = build_transform(cfg, is_train=True, choices=choices)
+        custom_tfm_train += [tfm_train_strong]
+        dm = DataManager(self.cfg, custom_tfm_train=custom_tfm_train)
+        self.train_loader_x = dm.train_loader_x
+        self.train_loader_u = dm.train_loader_u
+        self.val_loader = dm.val_loader
+        self.test_loader = dm.test_loader
+        self.num_classes = dm.num_classes
+        self.num_source_domains = dm.num_source_domains
+        self.lab2cname = dm.lab2cname
+        self.dm = dm
 
     def build_model(self):
         # ------------------通过cfg传递参数
@@ -308,7 +375,8 @@ class EnCoOp(TrainerX):
             self.model = nn.DataParallel(self.model)
 
     def forward_backward(self, batch):
-        image, label, domain = self.parse_batch_train(batch)
+        # image, label, domain = self.parse_batch_train(batch)
+        weak_image, strong_image, label, domain = self.parse_batch_train(batch)
 
         prec = self.cfg.TRAINER.COOP.PREC
         if prec == "amp":
@@ -320,13 +388,19 @@ class EnCoOp(TrainerX):
             self.scaler.step(self.optim)
             self.scaler.update()
         else:
-            output = self.model(image, domain)
-            loss = F.cross_entropy(output, label)
+            logits_x, loss_cr = self.model(weak_image, strong_image, domain)
+            loss_x = F.cross_entropy(logits_x, label)
+            loss_x /= self.cfg["NUM_SRC_DOMAINS"]
+            loss_cr /= self.cfg["NUM_SRC_DOMAINS"]
+            loss = loss_x + loss_cr
+            # loss = loss_x
             self.model_backward_and_update(loss)
 
         loss_summary = {
+            "loss_x": loss_x.item(),
+            "loss_cr": loss_cr.item(),
             "loss": loss.item(),
-            "acc": compute_accuracy(output, label)[0].item(),
+            "acc": compute_accuracy(logits_x, label)[0].item(),
         }
 
         if (self.batch_idx + 1) == self.num_batches:
@@ -335,13 +409,17 @@ class EnCoOp(TrainerX):
         return loss_summary
 
     def parse_batch_train(self, batch):
-        input = batch["img"]
+        input = batch["img"]  # weak aug
+        input2 = batch["img2"]  # strong aug
         label = batch["label"]
         domain = batch["domain"]
+
         input = input.to(self.device)
+        input2 = input2.to(self.device)
         label = label.to(self.device)
         domain = domain.to(self.device)
-        return input, label, domain
+
+        return input, input2, label, domain
 
     def load_model(self, directory, epoch=None):
         if not directory:
